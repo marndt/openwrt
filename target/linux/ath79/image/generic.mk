@@ -746,6 +746,19 @@ define Device/buffalo_wzr-450hp2
 endef
 TARGET_DEVICES += buffalo_wzr-450hp2
 
+define Device/circlemedia_circle-v1
+  $(Device/tplink-8mlzma)
+  SOC := ar9341
+  DEVICE_VENDOR := Circle Media
+  DEVICE_MODEL := Circle
+  DEVICE_VARIANT := v1
+  DEVICE_PACKAGES := kmod-usb2
+  TPLINK_HWID := 0x34200002
+  TPLINK_HWREV := 1
+  DEFAULT := n
+endef
+TARGET_DEVICES += circlemedia_circle-v1
+
 define Device/comfast_cf-e110n-v2
   SOC := qca9533
   DEVICE_VENDOR := COMFAST

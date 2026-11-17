@@ -1,0 +1,289 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+
+#include <dt-bindings/leds/common.h>
+
+#include "ar9341_tplink.dtsi"
+
+/ {
+	model = "Circle Media Circle v1";
+	compatible = "circlemedia,circle-v1", "qca,ar9341";
+
+	aliases {
+		label-mac-device = &wmac;
+
+		/*
+		 * The shared ar9341_tplink.dtsi points these at the stock
+		 * board's "power" LED, which this hardware does not have
+		 * (confirmed: driving it produced no visible effect). Point
+		 * them at the one real LED instead.
+		 */
+		led-boot = &led_status;
+		led-failsafe = &led_status;
+		led-running = &led_status;
+		led-upgrade = &led_status;
+	};
+
+	/*
+	 * The stock TL-MR3420 v2 board's "rfkill"/"reset" button GPIOs (16,
+	 * 17) are REMOVED here, not just disabled: this hardware physically
+	 * has only one button (the power button; confirmed by physical
+	 * inspection), so a separate WiFi-toggle/reset-to-defaults button
+	 * does not exist on this board at all. A passive debugfs read of
+	 * both pins while holding the physical power button showed no
+	 * change on either, consistent with them simply not being wired to
+	 * anything real here.
+	 *
+	 * The real power button is read by an external battery/power
+	 * supervisor chip, not directly by any SoC GPIO as a plain level.
+	 * The supervisor does its own long-press timing/debounce in
+	 * hardware and, once it has decided a shutdown should happen,
+	 * signals that decision to the SoC on a dedicated line: GPIO 12
+	 * (the donor board's "lan4" LED pin -- disabled as an LED below),
+	 * idle-high / active-low. This was confirmed two ways: (1) directly
+	 * reading the supervisor's own I2C status register (0xFA on the bus
+	 * below) bit 4, which flipped cleanly and reverted on its own
+	 * around a real, deliberate half-second press-and-release of the
+	 * physical button; (2) GPIO 12 itself triggering a real, full power
+	 * -down of the device during an extended-hold test (see
+	 * circle_v1_gpio_findings.md for the full writeup) -- so holding the
+	 * button long enough genuinely forces a hardware power-off via this
+	 * pin even with no OpenWrt-side software reacting to it at all.
+	 *
+	 * Modeled here as an ordinary gpio-keys power button, since Linux's
+	 * normal power-button handling (and userspace reacting to
+	 * KEY_POWER) is exactly the right behavior for this signal -- the
+	 * supervisor has already done the hold-time debounce in hardware by
+	 * the time this line changes, so no extra debounce-interval is
+	 * needed here.
+	 */
+	keys {
+		compatible = "gpio-keys";
+
+		power {
+			label = "Power";
+			linux,code = <KEY_POWER>;
+			gpios = <&gpio 12 GPIO_ACTIVE_LOW>;
+			debounce-interval = <60>;
+		};
+	};
+};
+
+/*
+ * This hardware has exactly one physical LED (confirmed by testing all
+ * nine stock LED positions one at a time: only GPIO 11 lit it). Seven of
+ * the other eight inherited from ar9341_tplink.dtsi do not exist on this
+ * board and are disabled below. GPIO 11 keeps its node name from the
+ * shared dtsi (it cannot be renamed without forking it), but its
+ * function/color/label now describe its real, confirmed role.
+ *
+ * "power" (GPIO 14) and "lan4" (GPIO 12) are disabled below too, but for
+ * a different reason than the rest: neither is simply a nonexistent LED.
+ *
+ * Disassembling the real stock firmware's "ledd" binary (which this
+ * donor dtsi's LED node names would otherwise suggest is a plain LED
+ * daemon) shows it implements a software bit-banged I2C bus using
+ * exactly GPIO 13 ("wlan", disabled separately below under &wmac) and
+ * GPIO 14 ("power") as its SDA/SCL pair, talking to a battery/power
+ * supervisor chip at I2C address 0x28 -- confirmed live (see
+ * circle_v1_gpio_findings.md). See the `i2c` bus node below. GPIO 14 is
+ * disabled here only to stop it being claimed as an LED output; the
+ * real binding for both 13 and 14 is the `i2c-gpio` node below.
+ *
+ * GPIO 12 ("lan4") is confirmed to be the supervisor's dedicated
+ * shutdown-request line, not an LED -- see the `keys` node above, which
+ * is its real binding. Disabled here for the same reason as GPIO 14.
+ */
+&leds {
+	power {
+		status = "disabled";
+	};
+
+	qss {
+		status = "disabled";
+	};
+
+	wan {
+		status = "disabled";
+	};
+
+	lan1 {
+		status = "disabled";
+	};
+
+	lan2 {
+		status = "disabled";
+	};
+
+	lan3 {
+		status = "disabled";
+	};
+
+	lan4 {
+		status = "disabled";
+	};
+
+	led_status: usb {
+		function = LED_FUNCTION_STATUS;
+		color = <LED_COLOR_ID_WHITE>;
+		gpios = <&gpio 11 GPIO_ACTIVE_LOW>;
+	};
+};
+
+/* wlan is defined directly on &wmac in the shared dtsi, not under &leds. */
+&wmac {
+	led {
+		status = "disabled";
+	};
+};
+
+&gpio {
+	usb_power {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "tp-link:power:usb";
+	};
+};
+
+/*
+ * DISABLED FOR NOW: battery/power-supervisor I2C bus (GPIO 13 SDA,
+ * GPIO 14 SCL, chip at 0x28). No driver, no binding, chip unidentified.
+ * See circle_v1_gpio_findings.md for the live-tested details. Removed from
+ * the build with #if 0 so the notes stay next to the code.
+ */
+#if 0
+/*
+ * Software bit-banged I2C bus to the battery/power-supervisor chip,
+ * reverse engineered from the stock firmware's "ledd" binary and then
+ * fully confirmed live (see circle_v1_gpio_findings.md for the full
+ * writeup): manually replaying the exact start/address/register/stop
+ * sequence over these two GPIOs reads back a status byte at register
+ * 0xFA matching the device's real, live state (USB-plugged-in bit,
+ * battery/charge bits, and a button bit that was observed to flip
+ * cleanly during a real button press and revert after release).
+ *
+ * sda-gpios/scl-gpios roles below are the CONFIRMED (live-tested)
+ * assignment -- note this is the reverse of what a first read of
+ * ledd's disassembly alone suggested.
+ */
+i2c {
+	compatible = "i2c-gpio";
+	sda-gpios = <&gpio 13 GPIO_ACTIVE_HIGH>;
+	scl-gpios = <&gpio 14 GPIO_ACTIVE_HIGH>;
+	i2c-gpio,delay-us = <5>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * Confirmed live to be a real, ACK-responding device at this
+	 * address (see circle_v1_gpio_findings.md). Its actual identity is
+	 * NOT confirmed -- reading register 0xFE (hoping for a Microchip
+	 * PAC19xx manufacturer ID of 0x5D) returned 0x00, so that guess is
+	 * not substantiated. No known upstream Linux driver has been
+	 * matched to this chip, so there is no real `compatible` string to
+	 * put here yet. Left disabled and informational only: this is NOT
+	 * ready for upstream submission in this form, and should not be
+	 * enabled until either the real chip is identified (with a proper
+	 * upstream driver) or a vendor-specific driver is written for it.
+	 */
+	supervisor@28 {
+		compatible = "circlemedia,circle-v1-supervisor";
+		reg = <0x28>;
+		status = "disabled";
+	};
+};
+#endif
+
+&spi {
+	status = "okay";
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			uboot: partition@0 {
+				label = "u-boot";
+				reg = <0x000000 0x020000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_uboot_1fc00: macaddr@1fc00 {
+						compatible = "mac-base";
+						reg = <0x1fc00 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+				};
+			};
+
+			partition@20000 {
+				compatible = "tplink,firmware";
+				label = "firmware";
+				reg = <0x020000 0x7d0000>;
+			};
+
+			partition@7f0000 {
+				label = "art";
+				reg = <0x7f0000 0x010000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					cal_art_1000: calibration@1000 {
+						reg = <0x1000 0x440>;
+					};
+				};
+			};
+		};
+	};
+};
+
+&usb {
+	status = "okay";
+};
+
+&usb_phy {
+	status = "okay";
+};
+
+/*
+ * The single physical jack is wired to the AR9341 switch's PHY4. The
+ * donor dtsi routes PHY4 to GMAC1 (eth1, the WAN port), which is why the
+ * RAM-boot test image showed the live port as eth1 while eth0 was just
+ * the switch's CPU link. Circle has no LAN switch ports, so route PHY4 to
+ * GMAC0 (eth0) instead and keep GMAC1 from registering a netdev, as
+ * ar9341_pisen_wmb001n.dts does. Stock firmware also used eth0 for the
+ * jack. UNTESTED on hardware: needs a build to verify.
+ */
+&eth0 {
+	phy-handle = <&swphy4>;
+
+	nvmem-cells = <&macaddr_uboot_1fc00 (-1)>;
+	nvmem-cell-names = "mac-address";
+};
+
+&eth1 {
+	compatible = "syscon", "simple-mfd";
+
+	gmac-config {
+		device = <&gmac>;
+		switch-phy-swap = <0>;
+	};
+};
+
+&wmac {
+	nvmem-cells = <&macaddr_uboot_1fc00 0>, <&cal_art_1000>;
+	nvmem-cell-names = "mac-address", "calibration";
+};
