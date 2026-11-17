@@ -259,28 +259,38 @@ i2c {
 };
 
 /*
- * The single physical jack is wired to the AR9341 switch's PHY4. The
- * donor dtsi routes PHY4 to GMAC1 (eth1, the WAN port), which is why the
- * RAM-boot test image showed the live port as eth1 while eth0 was just
- * the switch's CPU link. Circle has no LAN switch ports, so route PHY4 to
- * GMAC0 (eth0) instead and keep GMAC1 from registering a netdev, as
- * ar9341_pisen_wmb001n.dts does. Stock firmware also used eth0 for the
- * jack. UNTESTED on hardware: needs a build to verify.
+ * The single physical jack is the AR9341 switch's PHY0 (swconfig port 1:
+ * with the cable in, the switch ARL table learned the test Mac's address
+ * on port 1 and only port 1 reported link). Setting the switch PHY swap
+ * bit connects PHY0 directly to GMAC0 (eth0), as the stock firmware does
+ * ("eth0 ... connected to PHY at ag71xx-mdio.1:00") and as the TP-Link
+ * dtsi default does (swphy0). GMAC1 is kept from registering a netdev,
+ * as ar9341_pisen_wmb001n.dts does.
+ *
+ * History: swphy4 was used first (copied from the Pisen board, which has
+ * its jack on PHY4). With the swap bit set, PHY4 sits behind the switch,
+ * so eth0 probed with the right MAC but carrier stayed 0 (hardware test).
  */
 &eth0 {
-	phy-handle = <&swphy4>;
+	phy-handle = <&swphy0>;
 
 	nvmem-cells = <&macaddr_uboot_1fc00 (-1)>;
 	nvmem-cell-names = "mac-address";
+
+	/*
+	 * The ag71xx driver applies gmac-config when the node that holds it
+	 * probes as an ethernet device. It must therefore live on eth0: under
+	 * the syscon-only eth1 it is never read (hardware test: PHY0 stayed
+	 * behind the switch and eth0 received nothing).
+	 */
+	gmac-config {
+		device = <&gmac>;
+		switch-phy-swap = <1>;
+	};
 };
 
 &eth1 {
 	compatible = "syscon", "simple-mfd";
-
-	gmac-config {
-		device = <&gmac>;
-		switch-phy-swap = <0>;
-	};
 };
 
 &wmac {
