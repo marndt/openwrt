@@ -752,7 +752,7 @@ define Device/circlemedia_circle-v1
   DEVICE_VENDOR := Circle Media
   DEVICE_MODEL := Circle
   DEVICE_VARIANT := v1
-  DEVICE_PACKAGES := kmod-usb2
+  DEVICE_PACKAGES := kmod-usb2 kmod-usb-storage kmod-fs-ext4
   TPLINK_HWID := 0x34200002
   TPLINK_HWREV := 1
   DEFAULT := n
