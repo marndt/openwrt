@@ -24,48 +24,21 @@
 	};
 
 	/*
-	 * The stock TL-MR3420 v2 board's "rfkill"/"reset" button GPIOs (16,
-	 * 17) are REMOVED here, not just disabled: this hardware physically
-	 * has only one button (the power button; confirmed by physical
-	 * inspection), so a separate WiFi-toggle/reset-to-defaults button
-	 * does not exist on this board at all. A passive debugfs read of
-	 * both pins while holding the physical power button showed no
-	 * change on either, consistent with them simply not being wired to
-	 * anything real here.
+	 * No gpio-keys here. The stock TL-MR3420 v2 "rfkill"/"reset" GPIOs
+	 * (16, 17) do not exist on this hardware (it has one physical
+	 * button, the power button, which is read by the power supervisor,
+	 * not by a plain SoC GPIO).
 	 *
-	 * The real power button is read by an external battery/power
-	 * supervisor chip, not directly by any SoC GPIO as a plain level.
-	 * The supervisor does its own long-press timing/debounce in
-	 * hardware and, once it has decided a shutdown should happen,
-	 * signals that decision to the SoC on a dedicated line: GPIO 12
-	 * (the donor board's "lan4" LED pin -- disabled as an LED below),
-	 * idle-high / active-low. This was confirmed two ways: (1) directly
-	 * reading the supervisor's own I2C status register (0xFA on the bus
-	 * below) bit 4, which flipped cleanly and reverted on its own
-	 * around a real, deliberate half-second press-and-release of the
-	 * physical button; (2) GPIO 12 itself triggering a real, full power
-	 * -down of the device during an extended-hold test (see
-	 * circle_v1_gpio_findings.md for the full writeup) -- so holding the
-	 * button long enough genuinely forces a hardware power-off via this
-	 * pin even with no OpenWrt-side software reacting to it at all.
-	 *
-	 * Modeled here as an ordinary gpio-keys power button, since Linux's
-	 * normal power-button handling (and userspace reacting to
-	 * KEY_POWER) is exactly the right behavior for this signal -- the
-	 * supervisor has already done the hold-time debounce in hardware by
-	 * the time this line changes, so no extra debounce-interval is
-	 * needed here.
+	 * GPIO 12 is deliberately left UNCLAIMED. It was once assumed to be
+	 * the supervisor's "shutdown decided" output and modeled as a
+	 * KEY_POWER button. Hardware tests (long holds of 9 and ~15 s with a
+	 * fast register watcher and the kernel's button IRQ) never saw it go
+	 * low before the supervisor cut power, so that role is not
+	 * established; it may be something else, such as an interrupt line
+	 * from the supervisor MCU. Until it is understood, nothing should
+	 * drive or consume it (the donor "lan4" LED on this pin is disabled
+	 * below). See circle_v1_gpio_findings.md.
 	 */
-	keys {
-		compatible = "gpio-keys";
-
-		power {
-			label = "Power";
-			linux,code = <KEY_POWER>;
-			gpios = <&gpio 12 GPIO_ACTIVE_LOW>;
-			debounce-interval = <60>;
-		};
-	};
 };
 
 /*
@@ -89,9 +62,10 @@
  * disabled here only to stop it being claimed as an LED output; the
  * real binding for both 13 and 14 is the `i2c-gpio` node below.
  *
- * GPIO 12 ("lan4") is confirmed to be the supervisor's dedicated
- * shutdown-request line, not an LED -- see the `keys` node above, which
- * is its real binding. Disabled here for the same reason as GPIO 14.
+ * GPIO 12 ("lan4") is not an LED either: it is wired to the power
+ * supervisor, but its exact role is not established (see the note at the
+ * top of this file). It is disabled as an LED so nothing drives it, and
+ * is otherwise left unclaimed.
  */
 &leds {
 	power {
@@ -146,53 +120,24 @@
 };
 
 /*
- * DISABLED FOR NOW: battery/power-supervisor I2C bus (GPIO 13 SDA,
- * GPIO 14 SCL, chip at 0x28). No driver, no binding, chip unidentified.
- * See circle_v1_gpio_findings.md for the live-tested details. Removed from
- * the build with #if 0 so the notes stay next to the code.
+ * Software bit-banged I2C bus (GPIO 13 SDA, GPIO 14 SCL) to the power
+ * supervisor, a small MCU-like device that ACKs at address 0x28 (see
+ * circle_v1_gpio_findings.md). The bus is enabled so the device can be
+ * probed from userspace (i2c-tools); NO client node is declared on
+ * purpose: the chip is not identified, has no upstream driver and no
+ * binding, so a node with a made-up compatible would be wrong for
+ * submission. sda/scl roles are the live-confirmed assignment.
  */
-#if 0
-/*
- * Software bit-banged I2C bus to the battery/power-supervisor chip,
- * reverse engineered from the stock firmware's "ledd" binary and then
- * fully confirmed live (see circle_v1_gpio_findings.md for the full
- * writeup): manually replaying the exact start/address/register/stop
- * sequence over these two GPIOs reads back a status byte at register
- * 0xFA matching the device's real, live state (USB-plugged-in bit,
- * battery/charge bits, and a button bit that was observed to flip
- * cleanly during a real button press and revert after release).
- *
- * sda-gpios/scl-gpios roles below are the CONFIRMED (live-tested)
- * assignment -- note this is the reverse of what a first read of
- * ledd's disassembly alone suggested.
- */
-i2c {
-	compatible = "i2c-gpio";
-	sda-gpios = <&gpio 13 GPIO_ACTIVE_HIGH>;
-	scl-gpios = <&gpio 14 GPIO_ACTIVE_HIGH>;
-	i2c-gpio,delay-us = <5>;
-	#address-cells = <1>;
-	#size-cells = <0>;
-
-	/*
-	 * Confirmed live to be a real, ACK-responding device at this
-	 * address (see circle_v1_gpio_findings.md). Its actual identity is
-	 * NOT confirmed -- reading register 0xFE (hoping for a Microchip
-	 * PAC19xx manufacturer ID of 0x5D) returned 0x00, so that guess is
-	 * not substantiated. No known upstream Linux driver has been
-	 * matched to this chip, so there is no real `compatible` string to
-	 * put here yet. Left disabled and informational only: this is NOT
-	 * ready for upstream submission in this form, and should not be
-	 * enabled until either the real chip is identified (with a proper
-	 * upstream driver) or a vendor-specific driver is written for it.
-	 */
-	supervisor@28 {
-		compatible = "circlemedia,circle-v1-supervisor";
-		reg = <0x28>;
-		status = "disabled";
+/ {
+	i2c {
+		compatible = "i2c-gpio";
+		sda-gpios = <&gpio 13 GPIO_ACTIVE_HIGH>;
+		scl-gpios = <&gpio 14 GPIO_ACTIVE_HIGH>;
+		i2c-gpio,delay-us = <50>;
+		#address-cells = <1>;
+		#size-cells = <0>;
 	};
 };
-#endif
 
 &spi {
 	status = "okay";
